@@ -1,5 +1,6 @@
 (function () {
   'use strict';
+  /*global angular: false, Highcharts: false */
   angular.module('highcharts-ng', []).factory('highchartsNGUtils', highchartsNGUtils).directive('highchart', [
     'highchartsNGUtils',
     highchart
@@ -31,6 +32,8 @@
         };
       },
       deepExtend: function deepExtend(destination, source) {
+        //Slightly strange behaviour in edge cases (e.g. passing in non objects)
+        //But does the job for current use cases.
         if (angular.isArray(source)) {
           destination = angular.isArray(destination) ? destination : [];
           for (var i = 0; i < source.length; i++) {
@@ -48,6 +51,7 @@
     };
   }
   function highchart(highchartsNGUtils) {
+    // acceptable shared state
     var seriesId = 0;
     var ensureIds = function (series) {
       var changed = false;
@@ -59,6 +63,7 @@
       });
       return changed;
     };
+    // immutable
     var axisNames = [
         'xAxis',
         'yAxis'
@@ -92,6 +97,7 @@
                   scope.config[axisName].currentMax = e[axisName][0].max;
                 });
               } else {
+                //handle reset button - zoom out to all
                 scope.$apply(function () {
                   scope.config[axisName].currentMin = thisChart[axisName][0].dataMin;
                   scope.config[axisName].currentMax = thisChart[axisName][0].dataMax;
@@ -150,21 +156,42 @@
         disableDataWatch: '='
       },
       link: function (scope, element, attrs) {
+        // We keep some chart-specific variables here as a closure
+        // instead of storing them on 'scope'.
+        // prevSeriesOptions is maintained by processSeries
         var prevSeriesOptions = {};
         var processSeries = function (series) {
           var i;
           var ids = [];
+          var curcolor = 0;
           if (series) {
             var setIds = ensureIds(series);
             if (setIds) {
+              //If we have set some ids this will trigger another digest cycle.
+              //In this scenario just return early and let the next cycle take care of changes
               return false;
             }
+            //Find series to add or update
             angular.forEach(series, function (s) {
               ids.push(s.id);
               var chartSeries = chart.get(s.id);
+              var scolor = null;
+              if (scope.config.forceColors && chart.options.colors) {
+                if (!s.color) {
+                  scolor = chart.options.colors[curcolor];
+                }
+                curcolor++;
+                if (curcolor >= chart.options.colors.length) {
+                  curcolor = 0;
+                }
+              }
               if (chartSeries) {
                 if (!angular.equals(prevSeriesOptions[s.id], chartOptionsWithoutEasyOptions(s))) {
-                  chartSeries.update(angular.copy(s), false);
+                  var newopts = angular.copy(s);
+                  if (scolor) {
+                    newopts.color = scolor;
+                  }
+                  chartSeries.update(newopts, false);
                 } else {
                   if (s.visible !== undefined && chartSeries.visible !== s.visible) {
                     chartSeries.setVisible(s.visible, false);
@@ -172,10 +199,15 @@
                   chartSeries.setData(angular.copy(s.data), false);
                 }
               } else {
-                chart.addSeries(angular.copy(s), false);
+                var newopts = angular.copy(s);
+                if (scolor) {
+                  newopts.color = scolor;
+                }
+                chart.addSeries(newopts, false);
               }
               prevSeriesOptions[s.id] = chartOptionsWithoutEasyOptions(s);
             });
+            //  Shows no data text if all series are empty
             if (scope.config.noData) {
               var chartContainsData = false;
               for (i = 0; i < series.length; i++) {
@@ -191,6 +223,7 @@
               }
             }
           }
+          //Now remove any missing series
           for (i = chart.series.length - 1; i >= 0; i--) {
             var s = chart.series[i];
             if (s.options.id !== 'highcharts-navigator-series' && highchartsNGUtils.indexOf(ids, s.options.id) < 0) {
@@ -199,6 +232,7 @@
           }
           return true;
         };
+        // chart is maintained by initChart
         var chart = false;
         var initChart = function () {
           if (chart)
@@ -268,6 +302,7 @@
           }, true);
         });
         scope.$watch('config.options', function (newOptions, oldOptions, scope) {
+          //do nothing when called on registration
           if (newOptions === oldOptions)
             return;
           initChart();
